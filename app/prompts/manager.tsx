@@ -41,6 +41,7 @@ interface EditorTarget {
 const updatePrompt = httpsCallable(functions, 'updatePromptVersion');
 const createPromptVersion = httpsCallable(functions, 'createPromptVersion');
 const setActivePromptVersion = httpsCallable(functions, 'setActivePromptVersion');
+const getPromptDashboardData = httpsCallable(functions, 'getPromptDashboardData');
 
 function getCallableErrorMessage(err: unknown, fallback: string) {
   if (!err || typeof err !== 'object') return fallback;
@@ -77,7 +78,7 @@ export function PromptManager({ promptTypes: initialPromptTypes }: { promptTypes
       setSelectedTypeId(initialPromptTypes[0].id);
       setSelectedVersionId(initialPromptTypes[0].versions[0]?.id ?? null);
     }
-  }, [initialPromptTypes, selectedTypeId]);
+  }, [initialPromptTypes]);
 
   useEffect(() => {
     if (!copied) return;
@@ -104,6 +105,21 @@ export function PromptManager({ promptTypes: initialPromptTypes }: { promptTypes
       dialog.close();
     }
   }, [isEditorOpen]);
+
+  const syncPromptTypesFromServer = async () => {
+    try {
+      const result = await getPromptDashboardData({});
+      const data = result.data as { promptTypes?: PromptType[] };
+      if (!Array.isArray(data.promptTypes)) return;
+      setPromptTypes(data.promptTypes);
+    } catch (err) {
+      console.error('Error syncing prompts from server:', err);
+    }
+  };
+
+  useEffect(() => {
+    void syncPromptTypesFromServer();
+  }, []);
 
   const filteredPromptTypes = useMemo(() => {
     const q = deferredSearchQuery.trim().toLowerCase();
@@ -158,6 +174,31 @@ export function PromptManager({ promptTypes: initialPromptTypes }: { promptTypes
 
   const isModalDirty =
     isEditorOpen && editorTarget ? modalContent !== editorTarget.originalContent : false;
+  const editorTitleUpper = editorTarget?.promptTypeTitle.toUpperCase() ?? '';
+  const isSchemaEditor = editorTitleUpper.includes('SCHEMA');
+  const isSystemPromptEditor = editorTitleUpper.includes('SYSTEM_PROMPT');
+
+  const jsonValidation = useMemo(() => {
+    if (!isSchemaEditor) return null;
+    const raw = modalContent.trim();
+    if (!raw) {
+      return { valid: false, message: '빈 JSON', pretty: null as string | null };
+    }
+    try {
+      const parsed = JSON.parse(raw);
+      return {
+        valid: true,
+        message: '유효한 JSON',
+        pretty: JSON.stringify(parsed, null, 2),
+      };
+    } catch (err) {
+      return {
+        valid: false,
+        message: err instanceof Error ? err.message : 'JSON 파싱 실패',
+        pretty: null,
+      };
+    }
+  }, [isSchemaEditor, modalContent]);
 
   useEffect(() => {
     if (!selectedType && filteredPromptTypes.length > 0) {
@@ -247,16 +288,9 @@ export function PromptManager({ promptTypes: initialPromptTypes }: { promptTypes
     setError(null);
 
     try {
-      console.log('[save] calling updatePrompt', {
-        promptVersionId: editorTarget.promptVersionId,
-        contentLength: modalContent.length,
-      });
       await updatePrompt({
         promptVersionId: editorTarget.promptVersionId,
         newContent: modalContent,
-      });
-      console.log('[save] updatePrompt success', {
-        promptVersionId: editorTarget.promptVersionId,
       });
 
       setPromptTypes((prev) =>
@@ -275,6 +309,7 @@ export function PromptManager({ promptTypes: initialPromptTypes }: { promptTypes
       );
       setIsEditorOpen(false);
       setEditorTarget(null);
+      void syncPromptTypesFromServer();
     } catch (err) {
       console.error('Error updating prompt version:', err);
       const message = getCallableErrorMessage(
@@ -282,9 +317,22 @@ export function PromptManager({ promptTypes: initialPromptTypes }: { promptTypes
         '저장에 실패했습니다. 잠시 후 다시 시도해 주세요.',
       );
       setError(message);
-      window.alert(`save failed: ${message}`);
     } finally {
       setIsSavingModal(false);
+    }
+  };
+
+  const handleFormatJson = () => {
+    if (!isSchemaEditor || !jsonValidation?.valid || !jsonValidation.pretty) return;
+    setModalContent(jsonValidation.pretty);
+  };
+
+  const handleMinifyJson = () => {
+    if (!isSchemaEditor || !jsonValidation?.valid) return;
+    try {
+      setModalContent(JSON.stringify(JSON.parse(modalContent)));
+    } catch {
+      // no-op
     }
   };
 
@@ -321,6 +369,7 @@ export function PromptManager({ promptTypes: initialPromptTypes }: { promptTypes
       );
 
       openEditorForVersion(created);
+      void syncPromptTypesFromServer();
     } catch (err) {
       console.error('Error creating prompt version:', err);
       setError(getCallableErrorMessage(err, '버전 추가에 실패했습니다. 잠시 후 다시 시도해 주세요.'));
@@ -357,6 +406,7 @@ export function PromptManager({ promptTypes: initialPromptTypes }: { promptTypes
           };
         }),
       );
+      void syncPromptTypesFromServer();
     } catch (err) {
       console.error('Error setting active version:', err);
       setError('ACTIVE 버전 지정에 실패했습니다. 잠시 후 다시 시도해 주세요.');
@@ -668,13 +718,32 @@ export function PromptManager({ promptTypes: initialPromptTypes }: { promptTypes
         className="backdrop:bg-slate-900/50 rounded-2xl p-0 border-0 bg-transparent"
       >
         {isEditorOpen && editorTarget ? (
-          <div className="flex h-[85vh] w-[min(1100px,92vw)] max-w-5xl flex-col rounded-2xl border border-[#e5ecf5] bg-white shadow-2xl">
+          <div className="flex h-[88vh] w-[min(1280px,94vw)] max-w-6xl flex-col rounded-2xl border border-[#e5ecf5] bg-white shadow-2xl">
             <div className="flex items-center justify-between border-b border-[#eef2f8] px-5 py-4">
               <div className="min-w-0">
                 <p className="text-xs font-medium text-slate-500">Prompt Version Editor</p>
                 <h3 className="truncate text-lg font-semibold text-slate-900">
                   {editorTarget.promptTypeTitle} · v{editorTarget.promptVersionNumber}
                 </h3>
+                <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
+                  {isSchemaEditor && (
+                    <span
+                      className={[
+                        'rounded-full px-2 py-0.5 font-semibold',
+                        jsonValidation?.valid
+                          ? 'bg-emerald-100 text-emerald-700'
+                          : 'bg-amber-100 text-amber-700',
+                      ].join(' ')}
+                    >
+                      {jsonValidation?.message ?? 'JSON'}
+                    </span>
+                  )}
+                  {isSystemPromptEditor && (
+                    <span className="rounded-full bg-blue-100 px-2 py-0.5 font-semibold text-blue-700">
+                      Long Text Mode
+                    </span>
+                  )}
+                </div>
               </div>
               <div className="flex items-center gap-2">
                 <button
@@ -696,14 +765,71 @@ export function PromptManager({ promptTypes: initialPromptTypes }: { promptTypes
                 </button>
               </div>
             </div>
-            <div className="min-h-0 flex-1 p-4">
+            <div className="border-b border-[#eef2f8] px-5 py-3">
+              <div className="flex flex-wrap items-center gap-2">
+                {isSchemaEditor && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={handleFormatJson}
+                      disabled={!jsonValidation?.valid}
+                      className="inline-flex h-8 items-center rounded-lg border border-[#dde6f2] bg-white px-3 text-xs font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      JSON 정렬
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleMinifyJson}
+                      disabled={!jsonValidation?.valid}
+                      className="inline-flex h-8 items-center rounded-lg border border-[#dde6f2] bg-white px-3 text-xs font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      JSON 압축
+                    </button>
+                  </>
+                )}
+                <span className="text-xs text-slate-500">
+                  {modalContent.length.toLocaleString()} chars
+                </span>
+                <span className="text-xs text-slate-400">
+                  {modalContent.split('\n').length.toLocaleString()} lines
+                </span>
+              </div>
+            </div>
+            <div
+              className={[
+                'min-h-0 flex-1 p-4',
+                isSystemPromptEditor ? 'grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_360px]' : '',
+              ].join(' ')}
+            >
               <textarea
                 value={modalContent}
                 onChange={(e) => setModalContent(e.target.value)}
-                spellCheck={false}
-                className="h-full w-full resize-none rounded-xl border border-[#e5ecf5] bg-[#fbfdff] p-4 font-mono text-[13px] leading-6 text-slate-800 outline-none focus:border-[#7da2ff] focus:ring-4 focus:ring-[#dfeaff]"
+                spellCheck={!isSchemaEditor}
+                className={[
+                  'h-full w-full resize-none rounded-xl border border-[#e5ecf5] bg-[#fbfdff] p-4 text-slate-800 outline-none focus:border-[#7da2ff] focus:ring-4 focus:ring-[#dfeaff]',
+                  isSystemPromptEditor
+                    ? 'font-sans text-[14px] leading-7 tracking-[0.01em]'
+                    : 'font-mono text-[13px] leading-6',
+                ].join(' ')}
                 placeholder="프롬프트 내용을 입력하세요."
               />
+              {isSystemPromptEditor && (
+                <div className="min-h-0 rounded-xl border border-[#e5ecf5] bg-white p-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+                    Read Preview
+                  </p>
+                  <div className="mt-3 h-[calc(100%-1.5rem)] overflow-y-auto rounded-lg bg-[#f8fafd] p-4">
+                    <div className="whitespace-pre-wrap break-words text-sm leading-7 text-slate-700">
+                      {modalContent.trim() || '내용이 비어 있습니다.'}
+                    </div>
+                  </div>
+                </div>
+              )}
+              {isSchemaEditor && jsonValidation && !jsonValidation.valid && (
+                <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 xl:col-span-1">
+                  JSON 오류: {jsonValidation.message}
+                </div>
+              )}
             </div>
           </div>
         ) : (
