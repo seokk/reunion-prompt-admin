@@ -1,0 +1,42 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body {
+    min-height: 100%;
+  }
+
+  body {
+    font-family: var(--font-sans), sans-serif;
+    background:
+      linear-gradient(rgba(255, 255, 255, 0.88), rgba(255, 255, 255, 0.88)),
+      linear-gradient(90deg, rgba(15, 23, 42, 0.03) 1px, transparent 1px),
+      linear-gradient(rgba(15, 23, 42, 0.03) 1px, transparent 1px),
+      #f5f7fb;
+    background-size:
+      100% 100%,
+      24px 24px,
+      24px 24px,
+      auto;
+    color: #0f172a;
+    background-attachment: fixed;
+  }
+
+  pre,
+  code,
+  textarea {
+    font-family: var(--font-mono), monospace;
+  }
+
+  ::selection {
+    background: rgba(8, 145, 178, 0.18);
+    color: #0f172a;
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(148, 163, 184, 0.6) transparent;
+  }
+}
