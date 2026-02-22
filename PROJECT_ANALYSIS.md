@@ -12,11 +12,11 @@
 
 ## 2) 디렉터리/파일 역할
 - `app/layout.tsx`: 루트 레이아웃, 메타데이터 설정
-- `app/page.tsx`: 메인 페이지 서버 컴포넌트, 프롬프트 목록 조회 후 클라이언트 컴포넌트에 전달
-- `app/prompts/manager.tsx`: 실제 UI/상태 관리, 수정 저장 시 Firebase 함수 호출
+- `app/page.tsx`: 메인 페이지 서버 컴포넌트, `prompt_types` + `prompt_versions` 조회 후 클라이언트 컴포넌트에 전달
+- `app/prompts/manager.tsx`: 실제 UI/상태 관리(타입 선택, 버전 목록/검색/정렬, 팝업 편집, ACTIVE 지정, 버전 추가)
 - `lib/db.ts`: 루트 런타임(Next)용 Turso 클라이언트 생성
 - `lib/firebase.ts`: 브라우저 Firebase 앱/Functions 초기화
-- `functions/src/index.ts`: `updatePrompt` callable 함수(프롬프트 내용 업데이트)
+- `functions/src/index.ts`: callable 함수들(`createPromptVersion`, `setActivePromptVersion`, `updatePromptVersion` 등)
 - `functions/src/db.ts`: Functions 런타임용 Turso 클라이언트 싱글톤
 - `config.yml`: 루트 DB 접속 정보(현재 평문)
 - `firebase.json`: Hosting/Functions 배포 설정
@@ -25,15 +25,23 @@
 ## 3) 실행 흐름
 ### 3.1 초기 렌더링(조회)
 1. 사용자가 `/` 접속
-2. `app/page.tsx`(서버 컴포넌트)에서 `db.execute('SELECT ... FROM prompt_types')`
-3. 조회 결과를 `PromptManager`에 `props`로 전달
-4. 브라우저에서 좌측 목록/우측 상세 UI 렌더링
+2. `app/page.tsx`(서버 컴포넌트)에서 `prompt_types`, `prompt_versions`를 각각 조회
+3. `prompt_type_id` 기준으로 버전들을 타입에 매핑한 뒤 `PromptManager`에 전달
+4. 브라우저에서 좌측 `Prompt Types` / 우측 `Prompt Versions` 관리 UI 렌더링
 
 ### 3.2 수정 저장(변경)
-1. `PromptManager`에서 Edit -> Save 클릭
-2. `httpsCallable(functions, 'updatePrompt')` 호출
-3. `functions/src/index.ts`의 `updatePrompt`가 `prompt_types.description` 업데이트
-4. 성공 시 클라이언트 로컬 상태 즉시 반영(낙관적에 가까운 UX)
+1. 좌측에서 `prompt_type` 선택 → 우측에 해당 `prompt_versions` 리스트 표시
+2. 버전 행 더블클릭(또는 편집 버튼) → 팝업 에디터 열기
+3. Save 클릭 시 `httpsCallable(functions, 'updatePromptVersion')` 호출
+4. Functions에서 `prompt_versions.content` 업데이트
+5. 성공 시 클라이언트 로컬 상태 즉시 반영
+
+### 3.3 버전 관리(추가/ACTIVE)
+1. `빈 버전 추가` 또는 `현재 버전 복사 추가` 클릭
+2. `createPromptVersion` callable 호출 (`MAX(version)+1`로 신규 버전 생성)
+3. 성공 시 리스트에 즉시 추가 후 자동 선택/편집 가능
+4. `ACTIVE 지정` 클릭 시 `setActivePromptVersion` callable 호출
+5. 동일 타입 내 ACTIVE 상태를 단일 버전으로 재정렬/반영
 
 ## 4) 설정/빌드/배포 포인트
 - 루트 `package.json`
@@ -50,12 +58,15 @@
   - Hosting 정적 경로 `out`
   - 모든 경로 `index.html` rewrite
   - Functions predeploy에 `lint`, `build` 포함
+- Firebase Functions 배포 시 callable 신규 추가/수정이 있으면 `--only functions` 배포가 필수
+- UI 변경 후 Hosting 반영 전에는 루트 `npm run build`로 `out` 갱신 필요
 
 ## 5) 코드 관점 진단(유지보수 핵심)
 ### 강점
-- 조회/수정 경로가 단순하고 추적이 쉬움
+- 프롬프트 타입/버전 운영 흐름이 UI에 반영되어 실사용 관리 시나리오와 맞음
+- 버전 추가(빈/복사), ACTIVE 지정, 검색/정렬 등 운영 기능이 갖춰짐
+- 모달 편집 기반으로 버전 목록 가독성 확보(리스트는 1줄 미리보기 중심)
 - Functions DB 클라이언트 싱글톤으로 재사용성 양호
-- UI 상태 처리(로딩/에러/수정모드) 기본 구조 명확
 
 ### 주의/리스크
 1. 민감정보 노출 위험
@@ -65,6 +76,9 @@
 2. 조회 경로 불일치 가능성
 - 조회는 Next 서버(`lib/db.ts`), 수정은 Firebase Functions(`functions/src/db.ts`)
 - 환경변수/권한 세팅이 서로 다르면 조회는 되고 수정이 실패(또는 반대)하는 드리프트 가능
+- 실제 발생 사례:
+  - 루트 `config.yml`의 `TURSO_AUTH_TOKEN`과 `functions/.env`의 토큰이 불일치
+  - 조회는 정상, `createPromptVersion`는 Turso 404(`LibsqlError SERVER_ERROR 404`)로 실패
 
 3. 정적 배포 전략과 서버컴포넌트 조회의 충돌 여지
 - `output: 'export'`는 정적 export 지향
@@ -79,6 +93,11 @@
 - `blueprint.md`는 `/api/prompts` 기반 클라이언트 fetch 구조를 설명
 - 현재 구현은 서버 컴포넌트 직접 조회 구조
 
+6. callable 함수별 동작 차이로 인한 배포/브라우저 이슈 가능
+- `updatePrompt` 호출에서 CORS preflight 문제가 발생한 이력이 있음
+- 현재 프론트는 우회용 callable `updatePromptVersion` 사용 중
+- Functions 수정 후 Hosting 번들이 구버전이면 브라우저에서 이전 callable을 계속 호출할 수 있음
+
 ## 6) 권장 정비 우선순위
 1. 비밀키 즉시 교체/분리
 - Turso 토큰 재발급
@@ -89,6 +108,7 @@
 - 선택 A: 조회/수정 모두 Functions(API) 경유
 - 선택 B: 조회/수정 모두 Next 서버 액션/API 경유
 - 현재처럼 이원화 시 운영 복잡도 증가
+- 특히 Turso 인증정보를 루트/Functions 양쪽에서 따로 관리 중이라 드리프트 방지 체계 필요
 
 3. 배포 전략 확정
 - Firebase Hosting 정적 export 중심이면 조회도 클라이언트 API fetch로 정렬
@@ -100,6 +120,7 @@
 
 5. 문서 싱크
 - `blueprint.md`를 현재 코드와 일치하도록 갱신
+- callable 이름(`updatePromptVersion` 등)과 실제 수정 대상 테이블(`prompt_versions`) 기준으로 문서 갱신
 
 ## 7) 신규 개발 시 권장 작업 규칙
 - 변경 전 체크:
@@ -109,6 +130,11 @@
   - `npm run test:db`
   - 루트 빌드 + Functions 빌드/배포 점검
   - 프롬프트 조회/수정 E2E 수동 점검
+  - 확인 항목:
+    - 버전 추가(빈/복사)
+    - ACTIVE 지정
+    - 버전 더블클릭/편집 팝업 열림
+    - 팝업 저장 후 리스트 미리보기 갱신
 - 문서 동기화:
   - 구조 변경 시 이 문서 + `blueprint.md` 동시 업데이트
 
@@ -116,6 +142,20 @@
 - 프론트 진입: `app/page.tsx`
 - 프론트 상호작용: `app/prompts/manager.tsx`
 - 프론트 DB 조회 클라이언트: `lib/db.ts`
-- 수정 API: `functions/src/index.ts`의 `updatePrompt`
+- 수정/버전관리 API: `functions/src/index.ts`의 `updatePromptVersion`, `createPromptVersion`, `setActivePromptVersion`
 - Functions DB 클라이언트: `functions/src/db.ts`
 
+## 9) 최근 작업 이력(요약)
+- UI/UX:
+  - `prompt_types` 좌측 / `prompt_versions` 우측 구조로 재편
+  - 버전 리스트 1줄 미리보기 + 더블클릭/행 편집 아이콘으로 팝업 편집
+  - 버전 검색/정렬(`ACTIVE 우선`, `최신`, `오름차순`) 추가
+- 기능:
+  - 버전 추가(빈 버전 / 현재 버전 복사) 구현
+  - ACTIVE 버전 지정 구현
+  - 미저장 변경사항 경고(confirm) 추가
+- 안정화:
+  - Functions lint `max-len` 에러 정리
+  - Turso 토큰 불일치 문제 해결(`functions/.env` 동기화)
+  - `updatePrompt` CORS 이슈 우회용 `updatePromptVersion` callable 도입
+  - 편집 팝업 렌더링 문제 해결(현재 팝업 동작 상태)
