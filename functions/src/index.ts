@@ -16,7 +16,7 @@ export const updatePrompt = onCall<{
   promptId?: string,
   newContent: string,
 }>(
-  {cors: true},
+  {cors: true, invoker: "public"},
   async (request) => {
     // Get the database client instance at runtime.
     const db = getDbClient();
@@ -56,6 +56,53 @@ export const updatePrompt = onCall<{
   });
 
 /**
+ * New callable name for prompt version updates.
+ * Keeps same behavior as updatePrompt, but avoids legacy function config drift.
+ */
+export const updatePromptVersion = onCall<{
+  promptVersionId?: string,
+  promptId?: string,
+  newContent: string,
+}>(
+  {cors: true, invoker: "public"},
+  async (request) => {
+    const db = getDbClient();
+
+    const {promptVersionId, promptId, newContent} = request.data;
+    const targetVersionId = promptVersionId ?? promptId;
+
+    if (!targetVersionId || typeof newContent !== "string") {
+      logger.error("Invalid request data", {data: request.data});
+      const msg = "Invalid arguments. Expecting { promptVersionId: string, " +
+                  "newContent: string }.";
+      throw new Error(msg);
+    }
+
+    try {
+      logger.info(
+        `Updating prompt version ${targetVersionId} with new content.`
+      );
+      await db.execute({
+        sql: "UPDATE prompt_versions SET content = ? WHERE id = ?",
+        args: [newContent, targetVersionId],
+      });
+
+      logger.info(`Successfully updated prompt version ${targetVersionId}.`);
+      return {
+        success: true,
+        message: "Prompt version updated successfully.",
+      };
+    } catch (error) {
+      logger.error(
+        `Error updating prompt version ${targetVersionId}:`,
+        error
+      );
+      throw new Error("Failed to update prompt version in the database.");
+    }
+  }
+);
+
+/**
  * A callable function to create a new prompt version for a prompt type.
  * The new version number is max(version) + 1 within the same prompt_type_id.
  */
@@ -63,7 +110,7 @@ export const createPromptVersion = onCall<{
   promptTypeId: string,
   baseContent?: string,
 }>(
-  {cors: true},
+  {cors: true, invoker: "public"},
   async (request) => {
     const db = getDbClient();
     const {promptTypeId, baseContent} = request.data;
@@ -138,7 +185,7 @@ export const setActivePromptVersion = onCall<{
   promptTypeId: string,
   promptVersionId: string,
 }>(
-  {cors: true},
+  {cors: true, invoker: "public"},
   async (request) => {
     const db = getDbClient();
     const {promptTypeId, promptVersionId} = request.data;

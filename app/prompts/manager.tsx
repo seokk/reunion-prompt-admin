@@ -38,7 +38,7 @@ interface EditorTarget {
   originalContent: string;
 }
 
-const updatePrompt = httpsCallable(functions, 'updatePrompt');
+const updatePrompt = httpsCallable(functions, 'updatePromptVersion');
 const createPromptVersion = httpsCallable(functions, 'createPromptVersion');
 const setActivePromptVersion = httpsCallable(functions, 'setActivePromptVersion');
 
@@ -247,9 +247,16 @@ export function PromptManager({ promptTypes: initialPromptTypes }: { promptTypes
     setError(null);
 
     try {
+      console.log('[save] calling updatePrompt', {
+        promptVersionId: editorTarget.promptVersionId,
+        contentLength: modalContent.length,
+      });
       await updatePrompt({
         promptVersionId: editorTarget.promptVersionId,
         newContent: modalContent,
+      });
+      console.log('[save] updatePrompt success', {
+        promptVersionId: editorTarget.promptVersionId,
       });
 
       setPromptTypes((prev) =>
@@ -270,7 +277,12 @@ export function PromptManager({ promptTypes: initialPromptTypes }: { promptTypes
       setEditorTarget(null);
     } catch (err) {
       console.error('Error updating prompt version:', err);
-      setError('저장에 실패했습니다. 잠시 후 다시 시도해 주세요.');
+      const message = getCallableErrorMessage(
+        err,
+        '저장에 실패했습니다. 잠시 후 다시 시도해 주세요.',
+      );
+      setError(message);
+      window.alert(`save failed: ${message}`);
     } finally {
       setIsSavingModal(false);
     }
